@@ -1,24 +1,30 @@
-// neural_network.cpp
 #include "neural_network.h"
 #include <cmath>
 #include <stdexcept>
 #include <fstream> 
 #include <sstream> 
 #include <iostream>
+#include <random>
 
 
 
-// Конструктор с параметрами для установки количества входов и выходов
 NeuralNetwork::NeuralNetwork(size_t numInputs, size_t numOutputs) : numInputs_(numInputs), numOutputs_(numOutputs) {}
-
 
 void NeuralNetwork::addLayer(size_t numOutputs, Layer::ActivationType activationType) {
     size_t numInputs = layers_.empty() ? numInputs_ : layers_.back().getOutputSize();
     layers_.emplace_back(numInputs, numOutputs, activationType);
-    numOutputs_ = numOutputs;  // Update the network's output size
+    numOutputs_ = numOutputs;
+
+    if (!previousWeightUpdates_.empty()) {
+        previousWeightUpdates_.resize(layers_.size());
+        previousWeightUpdates_.back().resize(layers_.back().getOutputSize(), std::vector<double>(layers_.back().getInputSize(), 0.0));
+    }
+
+    if (!previousBiasUpdates_.empty()) {
+        previousBiasUpdates_.resize(layers_.size());
+        previousBiasUpdates_.back().resize(layers_.back().getOutputSize(), 0.0);
+    }
 }
-
-
 
 void NeuralNetwork::addLayer(const Layer& layer) {
     if (!layers_.empty() && layers_.back().getOutputSize() != layer.getInputSize()) {
@@ -28,7 +34,23 @@ void NeuralNetwork::addLayer(const Layer& layer) {
     if (layers_.size() == 1) {
         numInputs_ = layer.getInputSize();
     }
-    numOutputs_ = layer.getOutputSize();  // Update the network's output size
+    numOutputs_ = layer.getOutputSize();
+
+     if (!previousWeightUpdates_.empty())
+    {
+        previousWeightUpdates_.resize(layers_.size());
+         previousWeightUpdates_.back().resize(layers_.back().getOutputSize(), std::vector<double>(layers_.back().getInputSize(), 0.0));
+
+    }
+
+    if (!previousBiasUpdates_.empty())
+    {
+
+         previousBiasUpdates_.resize(layers_.size());
+         previousBiasUpdates_.back().resize(layers_.back().getOutputSize(), 0.0);
+
+    }
+
 }
 
 std::vector<double> NeuralNetwork::predict(const std::vector<double>& input) const {
@@ -45,7 +67,6 @@ std::vector<double> NeuralNetwork::predict(const std::vector<double>& input) con
     }
     return output;
 }
-
 
 void NeuralNetwork::train(const DataStorage& trainingData, size_t epochs, double learningRate) {
     if (layers_.empty()) {
@@ -64,6 +85,23 @@ void NeuralNetwork::train(const DataStorage& trainingData, size_t epochs, double
         throw std::runtime_error("Output size must be 1 for this training data");
     }
 
+
+    if (previousWeightUpdates_.empty()) {
+        previousWeightUpdates_.resize(layers_.size());
+        for (size_t i = 0; i < layers_.size(); ++i) {
+            previousWeightUpdates_[i].resize(layers_[i].getOutputSize(), std::vector<double>(layers_[i].getInputSize(), 0.0));
+        }
+    }
+
+    if (previousBiasUpdates_.empty()) {
+        previousBiasUpdates_.resize(layers_.size());
+        for (size_t i = 0; i < layers_.size(); ++i) {
+            previousBiasUpdates_[i].resize(layers_[i].getOutputSize(), 0.0);
+        }
+
+    }
+
+
     for (size_t epoch = 0; epoch < epochs; ++epoch) {
         for (size_t i = 0; i < trainingData.getBarDataSize(); ++i) {
             BarData bar = trainingData.getBarData(i);
@@ -71,21 +109,14 @@ void NeuralNetwork::train(const DataStorage& trainingData, size_t epochs, double
             std::vector<double> target = {bar.close};
 
             std::vector<double> output = predict(input);
-
-            backpropagate(target, output);
+            backpropagate(target, output, input); // Pass input to backpropagate
             updateWeights(learningRate, input);
         }
     }
-}}
+}
 
 
-
-void NeuralNetwork::saveModel(const std::string& filename) const {
-    std::ofstream file(filename);
-    if (!file.is_open()) {
-        throw std::runtime_error("Could not open file to save model.");
-    }
-
+void NeuralNetwork::saveModel(std::ostream& file) const {
     file << numInputs_ << " " << numOutputs_ << "\n";
 
     for (const auto& layer : layers_) {
@@ -105,24 +136,19 @@ void NeuralNetwork::saveModel(const std::string& filename) const {
         }
         file << "\n";
     }
-
-    file.close();
 }
 
+void NeuralNetwork::loadModel(std::istream& file) {
+    layers_.clear();
+    previousWeightUpdates_.clear();
+    previousBiasUpdates_.clear();
 
-
-
-void NeuralNetwork::loadModel(const std::string& filename) {
- std::ifstream file(filename);
-    if (!file.is_open()) {
-        throw std::runtime_error("Could not open file to load model.");
-    }
-
-    layers_.clear(); 
-
-    file >> numInputs_ >> numOutputs_;
 
     size_t numInputs, numOutputs;
+    file >> numInputs >> numOutputs;
+    numInputs_ = numInputs;
+    numOutputs_ = numOutputs;
+
     int activationTypeInt;
     while (file >> numInputs >> numOutputs >> activationTypeInt) {
         Layer::ActivationType activationType = static_cast<Layer::ActivationType>(activationTypeInt);
@@ -136,6 +162,7 @@ void NeuralNetwork::loadModel(const std::string& filename) {
         }
         layer.setWeights(weights);
 
+
         std::vector<double> biases(numOutputs);
         for (size_t i = 0; i < numOutputs; ++i) {
             file >> biases[i];
@@ -146,9 +173,8 @@ void NeuralNetwork::loadModel(const std::string& filename) {
         addLayer(layer); 
 
     }
-
-    file.close();
 }
+
 
 
 std::vector<Layer>& NeuralNetwork::getLayers() {
@@ -163,8 +189,8 @@ size_t NeuralNetwork::getNumOutputs() const {
     return numOutputs_;
 }
 
-
 std::vector<std::vector<double>> NeuralNetwork::calculateDeltas(const std::vector<double>& target, const std::vector<double>& output, const Layer& layer) const {
+
     std::vector<std::vector<double>> deltas(1, std::vector<double>(layer.getOutputSize()));
     for (size_t i = 0; i < layer.getOutputSize(); ++i) {
         double error = target[i] - output[i];
@@ -173,9 +199,9 @@ std::vector<std::vector<double>> NeuralNetwork::calculateDeltas(const std::vecto
     return deltas;
 }
 
+void NeuralNetwork::backpropagate(const std::vector<double>& target, const std::vector<double>& output, const std::vector<double>& input) { // Added input parameter
 
-void NeuralNetwork::backpropagate(const std::vector<double>& target, const std::vector<double>& output) {
-     if (layers_.empty()) {
+    if (layers_.empty()) {
         throw std::runtime_error("Cannot backpropagate on an empty network.");
     }
 
@@ -185,20 +211,8 @@ void NeuralNetwork::backpropagate(const std::vector<double>& target, const std::
 
 
 
-    std::vector<std::vector<double>> layerInputs;
-     layerInputs.push_back(input); // Store initial input
-
-
-    for (size_t i = 0; i < layers_.size() -1; ++i)
-    {
-         layerInputs.push_back(layers_[i].forward(layerInputs.back()));
-
-    }
-
-
-
-    std::vector<std::vector<std::vector<double>>> deltas;
-    deltas.push_back(calculateDeltas(target, layers_.back().forward(layerInputs.back()), layers_.back()));  //Use correct input for last layer
+ std::vector<std::vector<std::vector<double>>> deltas;
+    deltas.push_back(calculateDeltas(target, output, layers_.back()));  
 
 
 
@@ -206,12 +220,20 @@ void NeuralNetwork::backpropagate(const std::vector<double>& target, const std::
         std::vector<double> nextLayerWeightedSum(layers_[i].getOutputSize(), 0.0);
         for (size_t j = 0; j < layers_[i + 1].getOutputSize(); ++j) {
             for (size_t k = 0; k < layers_[i].getOutputSize(); ++k) {
-                nextLayerWeightedSum[k] += deltas.back()[0][j] * layers_[i+1].getWeights()[j][k];
+                nextLayerWeightedSum[k] += deltas.back()[0][j] * layers_[i + 1].getWeights()[j][k];
             }
         }
 
-        //Correctly use already calculated layer output
-         deltas.insert(deltas.begin(), calculateDeltas(nextLayerWeightedSum, layerInputs[i+1], layers_[i]));
+
+        std::vector<double> prevLayerOutput = (i == 0) ? input : layers_[i - 1].getOutput();
+        std::vector<double> currentLayerOutput = layers_[i].forward(prevLayerOutput);
+
+
+
+        deltas.insert(deltas.begin(), calculateDeltas(nextLayerWeightedSum, currentLayerOutput, layers_[i]));
+
+
+
 
     }
 
@@ -222,31 +244,69 @@ void NeuralNetwork::backpropagate(const std::vector<double>& target, const std::
 }
 
 
-
 void NeuralNetwork::updateWeights(double learningRate, const std::vector<double>& input) {
-
     std::vector<double> layerInput = input;
+
+    if (previousWeightUpdates_.empty()) {
+       previousWeightUpdates_.resize(layers_.size());
+       for(size_t i = 0; i < layers_.size(); ++i)
+       {
+           previousWeightUpdates_[i].resize(layers_[i].getOutputSize(), std::vector<double>(layers_[i].getInputSize(), 0.0));
+       }
+
+    }
+
+    if(previousBiasUpdates_.empty())
+    {
+         previousBiasUpdates_.resize(layers_.size());
+
+        for(size_t i = 0; i < layers_.size(); ++i)
+        {
+            previousBiasUpdates_[i].resize(layers_[i].getOutputSize(), 0.0);
+
+        }
+    }
+
+
+
 
     for (size_t i = 0; i < layers_.size(); ++i) {
         Layer& layer = layers_[i];
         std::vector<std::vector<double>>& weights = layer.getWeights();
         std::vector<double>& biases = layer.getBiases();
-       
         std::vector<std::vector<double>> deltas = layer.getDeltas();
 
         for (size_t j = 0; j < layer.getOutputSize(); ++j) {
             for (size_t k = 0; k < layer.getInputSize(); ++k) {
-                weights[j][k] += learningRate * deltas[0][j] * layerInput[k]; 
+                 double weightUpdate = learningRate * deltas[0][j] * layerInput[k] + momentum_ * previousWeightUpdates_[i][j][k];
+                 weights[j][k] += weightUpdate;
+                 previousWeightUpdates_[i][j][k] = weightUpdate;
             }
-            biases[j] += learningRate * deltas[0][j];
+
+
+            double biasUpdate = learningRate * deltas[0][j] + momentum_ * previousBiasUpdates_[i][j];
+
+            biases[j] += biasUpdate;
+            previousBiasUpdates_[i][j] = biasUpdate;
+
+
         }
 
-        layerInput = layer.forward(layerInput); // Recalculate output for next layer
+        layerInput = layer.forward(layerInput); 
     }
 }
 
 
+void NeuralNetwork::setTrainingMode(bool isTraining) {
+
+    (void)isTraining;
+}
+
+
+
+
 double NeuralNetwork::activationFunction(double x, Layer::ActivationType type) {
+
     switch (type) {
     case Layer::ActivationType::ReLU:
         return relu(x);
@@ -267,7 +327,8 @@ double NeuralNetwork::activationFunction(double x, Layer::ActivationType type) {
 
 
 double NeuralNetwork::activationDerivative(double x, Layer::ActivationType type) {
-     switch (type) {
+
+      switch (type) {
     case Layer::ActivationType::ReLU:
         return reluDerivative(x);
     case Layer::ActivationType::Sigmoid:
@@ -288,19 +349,33 @@ double NeuralNetwork::relu(double x) {
     return std::max(0.0, x);
 }
 
+
 double NeuralNetwork::reluDerivative(double x) {
+
     return x > 0 ? 1.0 : 0.0;
 }
 
+
+
 double NeuralNetwork::sigmoid(double x) {
+
     return 1.0 / (1.0 + std::exp(-x));
 }
 
+
+
+
 double NeuralNetwork::sigmoidDerivative(double x) {
+
     double sig = sigmoid(x);
     return sig * (1.0 - sig);
+
 }
 
+
+
+
 double NeuralNetwork::tanh(double x) {
+
     return std::tanh(x);
 }
