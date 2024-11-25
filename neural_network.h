@@ -1,4 +1,3 @@
-// neural_network.h
 #ifndef NEURAL_NETWORK_H
 #define NEURAL_NETWORK_H
 
@@ -7,6 +6,7 @@
 #include "data_storage.h"
 #include <stdexcept>
 #include <fstream> 
+#include <iostream>
 
 
 class NeuralNetwork {
@@ -19,24 +19,27 @@ public:
     std::vector<double> predict(const std::vector<double>& input) const;
 
     void train(const DataStorage& trainingData, size_t epochs, double learningRate);
-    void saveModel(const std::string& filename) const;
-    void loadModel(const std::string& filename);       
+
+    void saveModel(std::ostream& file) const;
+    void loadModel(std::istream& file);
 
     std::vector<Layer>& getLayers();
     size_t getNumInputs() const;
     size_t getNumOutputs() const;
 
-    void setTrainingMode(bool isTraining); // Добавлен метод для установки режима обучения
-
+    void setTrainingMode(bool isTraining);
 
 private:
     std::vector<Layer> layers_;
     size_t numInputs_;
     size_t numOutputs_;
-    bool isTraining_ = false; // Флаг режима обучения
+
+    double momentum_ = 0.9;
+    std::vector<std::vector<std::vector<double>>> previousWeightUpdates_;
+    std::vector<std::vector<double>> previousBiasUpdates_;
 
     std::vector<std::vector<double>> calculateDeltas(const std::vector<double>& target, const std::vector<double>& output, const Layer& layer) const;
-    void backpropagate(const std::vector<double>& target, const std::vector<double>& output, const std::vector<double>& input);
+    void backpropagate(const std::vector<double>& target, const std::vector<double>& output);
     void updateWeights(double learningRate, const std::vector<double>& input);
 
     static double activationFunction(double x, Layer::ActivationType type);
